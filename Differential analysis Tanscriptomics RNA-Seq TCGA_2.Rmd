@@ -1,0 +1,267 @@
+---
+title: "Differential analysis of transcriptomic data"
+output: html_notebook
+---
+
+# Libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(clusterProfiler)
+library(data.table)
+library(DESeq2)
+library(EnhancedVolcano)
+library(ggfortify)
+library(ggrepel)
+library(ggvenn)
+library(gplots)
+library(gridExtra)
+library(matrixStats)
+library(org.Hs.eg.db)
+library(PCAtools)
+library(pheatmap)
+library(readxl)
+library(reticulate)
+library(sva)
+library(tidyverse)
+library(venn)
+```
+
+# Data
+
+The data can either be downloaded in the following way or directly downloaded from XenaData.
+
+```{r}
+# Export expression data from one cohort
+data(XenaData)
+head(XenaData)
+availTCGA()
+View(showTCGA())
+downloadTCGA(project = "BRCA", data_type = "Gene Expression RNASeq",
+             file_type = "IlluminaHiSeq RNASeqV2", destdir = "./")
+dfexp = fread("./TCGA.BRCA.sampleMap/HiSeqV2.gz")
+write.csv(dfexp, file = "BRCA_HiSeqV2.csv",row.names=FALSE)
+class(dfexp)
+```
+
+
+```{r}
+# data wrangling
+rawCounts <- fread("BRCA_HiSeqV2.csv")
+
+rawCounts <- rawCounts %>% 
+  remove_rownames %>% 
+  column_to_rownames("sample") 
+
+dim(rawCounts)
+
+keep <- rowSums(rawCounts) > 10
+table(keep, useNA="always") 
+
+filtCounts <- rawCounts[keep,]
+dim(filtCounts)
+```
+
+# Sample information
+
+```{r}
+## Source: https://tcga.xenahubs.net
+sampleinfo <- fread("BRCA_clinic.csv") %>% 
+  column_to_rownames("sampleID")
+```
+
+# Match the sample IDs
+
+```{r}
+# Match the sampleinformation with the data
+dif_remove <- setdiff(row.names(sampleinfo), colnames(filtCounts))
+
+sampleinfo <- sampleinfo[!(row.names(sampleinfo) %in% dif_remove),]
+
+filtCounts <- filtCounts[, rownames(sampleinfo)]
+
+identical(names(filtCounts), rownames(sampleinfo))
+```
+
+# Explore the matched data
+
+```{r}
+# Data pattern
+par(cex.axis=0.8)
+boxplot(filtCounts, main='Raw counts', las=2)
+```
+
+# Define the group (s) for the DE analysis
+
+```{r}
+library(stringi)
+
+names(sampleinfo)
+
+# Replace blank values
+sampleinfo$condition <- stri_replace_all_regex(sampleinfo$PAM50Call_RNAseq,
+                                  pattern=c('^$'),
+                                  replacement=c('Unknown'),
+                                  vectorize=FALSE) 
+
+# Frequency of the groups
+freq <- table(sampleinfo$condition)
+freq
+
+barplot(freq, main = "Distribution of Groups", xlab = "Groups", ylab = "Frequency")
+```
+
+# DESEQ2
+
+DESeq2 uses a negative binomial model to estimate variance and test for differential expression. DESeq2 requires integer data. 
+
+```{r}
+## Refer to: https://bioconductor.org/packages/devel/bioc/vignettes/PCAtools/inst/doc/PCAtools.html
+dds <- DESeqDataSetFromMatrix(countData = round(filtCounts), colData = sampleinfo, design= ~ condition)
+dds <- DESeq(dds)
+res <- results(dds)
+summary(res)
+```
+
+## PCA
+
+```{r}
+p <- pca(assay(dds), metadata = sampleinfo, removeVar = 0.1)
+
+screeplot(p, axisLabSize = 18, titleLabSize = 22)
+
+biplot(p, x = "PC1", y = "PC2", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, x = "PC1", y = "PC2", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, x = "PC2", y = "PC3", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, x = "PC3", y = "PC4", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, x = "PC4", y = "PC5", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, x = "PC5", y = "PC6", showLoadings = F, colby = "condition", pointSize = 2, legendPosition = "right", lab = p$metadata$description_lab, labSize = 3)
+
+biplot(p, showLoadings = TRUE, labSize = 4, pointSize = 4, sizeLoadingsNames = 4)
+```
+## DE genes and volcano plot
+
+```{r}
+# DE genes
+res <- results(dds, contrast=c("condition","Basal","Normal"))
+
+res_df <- as.data.frame(res) %>% 
+  arrange(padj)
+
+EnhancedVolcano(res_df, lab = rownames(res_df), x = "log2FoldChange", y = "padj", title = "DESEQ2", subtitle = NULL)
+
+degs <- res_df %>% 
+  rownames_to_column("gene") %>% 
+  write_csv("BRCA_deseq2.csv") %>% 
+  filter(padj < 0.05 & abs(log2FoldChange)>1.5) %>% 
+  write_csv("BRCA_deseq2_sig.csv") %>% 
+  pull("gene")
+```
+
+# limma voom
+
+limma voom uses a linear model to estimate variance and test for differential expression. limma voom includes an algorithm for normalization and variance stabilization, which transforms raw count data into log2-counts per million and reduces the dependence of variance on the mean expression level.
+
+```{r}
+y <- DGEList(counts = filtCounts, group = sampleinfo$condition)
+
+y <- calcNormFactors(y)
+
+design <- model.matrix(~0+condition, data = sampleinfo)
+
+v <- voom(y, design, plot = TRUE)
+
+fit <- lmFit(v, design)
+
+fit <- eBayes(fit)
+
+plotSA(fit, main="Final model: Mean-variance trend")
+
+res_limma <- topTable(fit, coef = 2)
+
+head(res_limma)
+```
+
+## Group-wise comparison 
+
+```{r}
+fit_gp <- names(as.data.frame(head(coef(fit)))) %>% print()
+gp_2 <- c("conditionNormal") %>% print()
+gp_1 <- fit_gp[!fit_gp %in% gp_2] %>% print()
+
+for (i in seq_along (gp_1)) {
+   for (j in seq_along (gp_2)) {
+  k = print (paste0(gp_1[i], "-", gp_2[j]))
+  
+contr <- makeContrasts(k, levels = colnames(coef(fit)))
+contr
+  
+tmp <- contrasts.fit(fit, contr)
+tmp <- eBayes(tmp)
+top.table <- topTable(tmp, sort.by = "P", n = Inf) %>% 
+  rownames_to_column("gene") %>% 
+  arrange(desc(logFC)) %>% 
+  write_csv(paste0("top_table_", k, ".csv"))
+head(top.table, 20)
+length(which(top.table$adj.P.Val < 0.05))
+
+EnhancedVolcano(top.table, lab = top.table$gene, x = "logFC", y = "adj.P.Val", title = k, subtitle = NULL, pCutoff = 0.05)
+
+ggsave (paste0("top_table_", k, ".png"))
+  }
+}
+
+knitr::include_graphics("top_table_conditionBasal-conditionNormal.png")
+
+```
+
+# Similarity between DESEQ2 and Limma voom
+
+```{r}
+
+# Upregulated
+dflist_up <- list(deseq2_up=fread("BRCA_deseq2.csv")[padj < 0.01 & log2FoldChange > 1.5]$gene,
+                  limma_up=fread("top_table_conditionBasal-conditionNormal.csv")[adj.P.Val < 0.01 & logFC > 1.5]$gene
+                         ) 
+venn(dflist_up, ilab=TRUE, zcolor = "style")
+shared_genes_up <- Reduce(intersect, dflist_up)%>% 
+  print()
+
+# Downregulated
+dflist_down <- list(deseq2_down=fread("BRCA_deseq2.csv")[padj < 0.01 & log2FoldChange < -1.5]$gene,
+                  limma_down=fread("top_table_conditionBasal-conditionNormal.csv")[adj.P.Val < 0.01 & logFC < -1.5]$gene
+                         ) 
+venn(dflist_down, ilab=TRUE, zcolor = "style")
+shared_genes_down <- Reduce(intersect, dflist_down)%>% 
+  print()
+```
+
+# GSEA visualization
+
+```{r, fig.height=10}
+
+ego_up <- enrichGO(gene     = shared_genes_up,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'SYMBOL',
+                ont           = "ALL",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.9,
+                qvalueCutoff  = 0.9)
+
+barplot(ego_up, split = "ONTOLOGY")+facet_grid(ONTOLOGY~., scale = "free")+ggtitle("GSEA of the shared upregulated genes")
+
+ego_down <- enrichGO(gene     = shared_genes_down,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'SYMBOL',
+                ont           = "ALL",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.9,
+                qvalueCutoff  = 0.9)
+
+barplot(ego_down, split = "ONTOLOGY")+facet_grid(ONTOLOGY~., scale = "free")+ggtitle("GSEA of the shared downregulated genes")
+```
+
