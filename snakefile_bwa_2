@@ -1,0 +1,96 @@
+import os
+
+# List of all available samples
+SAMPLES = [sample.split("_1.filt.fastq.gz")[0] for sample in os.listdir("/mnt/e/project_ad/data") if sample.endswith("_1.filt.fastq.gz")]
+
+rule all:
+    input:
+        "plots/quals.svg"
+
+rule bwa_mem_map:
+    input:
+        #ref="/mnt/e/genome/index_bwa/HG38",
+        r1="/mnt/e/project_ad/data/{sample}_1.filt.fastq.gz",
+        r2="/mnt/e/project_ad/data/{sample}_2.filt.fastq.gz",
+        #idxfile = expand("/mnt/e/genome/index_bwa/HG38.{ext}", ext=['sa', 'amb', 'ann', 'pac', 'bwt'])
+    output:
+        "mapped_reads/{sample}.bam"
+    threads: 
+        16  
+    shell:
+        "bwa mem -t {threads} /mnt/e/genome/index_bwa/HG38 {input.r1} {input.r2} | samtools view -bS > {output}"
+
+#rule sam_to_bam:
+#    input:
+#        "mapped_reads/{sample}.sam"
+#    output:
+#        "mapped_reads/{sample}.bam"
+#    shell:
+#        "samtools view -bS {input} > {output}"
+
+rule samtools_sort:
+    input:
+        "mapped_reads/{sample}.bam"
+    output:
+        "sorted_reads/{sample}.bam"
+    shell:
+        "samtools sort -T sorted_reads/{wildcards.sample} -O bam {input} > {output}"
+
+rule samtools_index:
+    input:
+        "sorted_reads/{sample}.bam"
+    output:
+        "sorted_reads/{sample}.bam.bai"
+    shell:
+        "samtools index {input}"
+
+rule bcftools_mpileup:
+    input:
+        ref="/mnt/e/genome/GRCh38_latest_genomic.fna",
+        bam=expand("sorted_reads/{sample}.bam", sample=SAMPLES),
+        bai=expand("sorted_reads/{sample}.bam.bai", sample=SAMPLES)
+    output:
+        bcf=directory("calls") + "/{sample}.bcf"  # Use the same wildcard for both output files
+    threads: 
+        16  
+    shell:
+        """
+        mkdir -p calls  # Create the 'calls' directory if it doesn't exist
+        bcftools mpileup --threads {threads} -Ob -f {input.ref} {input.bam} -o {output.bcf}
+        """
+        
+rule bcftools_call:
+    input:
+        bcf_temp=expand("calls/{sample}.bcf", sample=SAMPLES)
+    output:
+        vcf="calls/{sample}.vcf"
+    threads: 
+        16  
+    shell:
+        """
+        bcftools call --threads {threads} -m -v {input.bcf_temp} |
+        vcfutils.pl varFilter > {output.vcf}
+        """
+
+rule plot_quals:
+    input:
+        vcf="calls/{sample}.vcf"
+    output:
+        "plots/{sample}_quals.svg"
+    script:
+        "scripts/plot-quals.py"
+
+# New rule to aggregate variant quality plots for all samples
+rule aggregate_plots:
+    input:
+        expand("plots/{sample}_quals.svg", sample=SAMPLES)
+    output:
+        "plots/quals.svg"
+    shell:
+        """
+        # Concatenate all individual SVG files into one
+        cat {input} > {output}
+        """
+
+# Add the dependency between the new rule and the 'all' rule
+ruleorder: aggregate_plots > all
