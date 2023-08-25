@@ -15,21 +15,22 @@ mkdir -p ./data/ ./genome/ data/trimming results/fastqc results/sam results/bam
 
 # Download the data
 cd data
-wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/sample_id891/sample_id891269/sample_id891269_2.fastq.gz
-wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/sample_id891/sample_id891269/sample_id891269_1.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR891/SRR891269/SRR891269_2.fastq.gz
+wget -nc ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR891/SRR891269/SRR891269_1.fastq.gz
 
 # Create a sample id list
-ls sample_id*gz | cut -f 1 -d "_" | sort | uniq  > sample_ids.txt
+ls SRR*gz | cut -f 1 -d "_" | sort | uniq  > sample_ids.txt
 cd ..
 
 # Run fastqc or falco
 ## fastqc -t 8 *fastq.gz -o data/fastqc
 
 for sample_id in $(cat data/sample_ids.txt); do
-    mkdir -p results/fastqc/"$sample_id"
-    falco "data/${sample_id}_1.fastq.gz" -o "results/fastqc/$sample_id" -t 16
+    mkdir -p results/fastqc/"$sample_id"_1
+    mkdir -p results/fastqc/"$sample_id"_2
+    falco "data/${sample_id}_1.fastq.gz" -o "results/fastqc/${sample_id}_1" -t 16
+    falco "data/${sample_id}_2.fastq.gz" -o "results/fastqc/${sample_id}_2" -t 16
 done
-
 
 # Run multiqc 
 cd results/fastqc
