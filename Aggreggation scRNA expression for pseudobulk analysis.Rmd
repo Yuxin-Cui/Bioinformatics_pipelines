@@ -1,0 +1,120 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(Seurat)
+library(tidyverse)
+# https://www.bioconductor.org/packages/release/bioc/src/contrib/DESeq2_1.42.0.tar.gz
+# BiocManager::install("DESeq2")
+library(DESeq2)
+librarian::shelf(edgeR)
+```
+
+```{r}
+seurat_sub <- readRDS("GSE120575_Sade_Feldman_mac_subset.rds")
+seurat_sub
+```
+
+```{r, fig.width=4, fig.height=3}
+# View the UMAP plot
+colnames(seurat_sub@meta.data)
+Seurat::DimPlot(seurat_sub, group.by = c("sample_type"))
+```
+
+# Pre-process the data
+
+```{r}
+#
+pb_counts <-AggregateExpression(object = seurat_sub, group.by = "Patient_pre_post", slot = "counts") %>% 
+  as.data.frame() %>% 
+  round () 
+
+#
+pb_meta <- seurat_sub@meta.data %>% 
+  group_by(Patient_pre_post) %>% 
+  summarise(cellnumber = n ()) %>% 
+  left_join(seurat_sub@meta.data) %>% 
+  distinct(.[[1]], .keep_all = T) %>%  
+  column_to_rownames("Patient_pre_post") %>% 
+  select (response.ext, response, sample_type, cellnumber) %>% 
+  view()
+
+#
+names(pb_counts) <- rownames(pb_meta)
+
+#
+identical (names(pb_counts), rownames(pb_meta))
+```
+
+
+# DESEQ2 analysis after pseudobulk transformation
+
+```{r}
+# Create a DESeqDataSet object from count matrix and metadata
+## multiple designs can be allowed
+dds <- DESeqDataSetFromMatrix(
+  countData = pb_counts,        # Count matrix
+  colData = pb_meta,            # Metadata (sample information)
+  design = ~ sample_type,       # Experimental design formula
+  tidy = FALSE                  # Keep the original result
+) 
+
+# Filter out rows (genes) with all zero counts
+keep <- !rowSums(counts(dds)) == 0
+dds <- dds[keep, ]
+
+# Perform DESeq2 analysis
+dds <- DESeq(dds)
+
+# Get the names of the results (DE genes)
+resultsNames(dds)
+
+# Extract DESeq2 results and convert to a data frame
+de_deseq2 <- results(dds) %>%
+  as.data.frame()
+
+# View the first few rows of the DESeq2 results
+head(de_deseq2)
+```
+
+# Optional edgeR analysis
+
+```{r}
+# Create a DGEList object
+y <- DGEList(counts = pb_counts, group = pb_meta$sample_type)
+
+# Filter low-expression genes
+keep <- filterByExpr(y)
+
+# Apply the filtering to the DGEList object
+y <- y[keep, , keep.lib.sizes = FALSE]
+
+# Normalize for library size
+y <- calcNormFactors(y)
+
+# Note: Normalization factors are calculated to account for differences in library size.
+
+# Create a design matrix for edgeR analysis
+design <- model.matrix(~ pb_meta$sample_type)
+
+# Estimate dispersion
+y <- estimateDisp(y, design)
+
+# Note: Dispersion is estimated to model the variability of counts across samples.
+
+# Perform quasi-likelihood F-test (QLF)
+fit <- glmQLFit(y, design)
+qlf <- glmQLFTest(fit, coef = 2)
+
+# Extract top tags (DE genes)
+de_edger_qlf <- topTags(qlf) %>%
+  as.data.frame()
+
+# View the first few rows of the result
+head(de_edger_qlf)
+```
+
+
+
