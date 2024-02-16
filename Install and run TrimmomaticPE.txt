@@ -1,0 +1,51 @@
+# First check whether java is installed
+java -version
+
+# If not, install java
+sudo apt update
+sudo apt install default-jre
+
+# After java is installed, check again. Often java installed, but can not find the path. Run: 
+find /usr/lib/jvm -name "java"
+echo 'export PATH="/usr/lib/jvm/java-19-openjdk-amd64/bin:$PATH"' >> ~/.bashrc
+#Restart the shell
+source ~/.bashrc
+java -version
+#openjdk version "19.0.2" 2023-01-17
+#OpenJDK Runtime Environment (build 19.0.2+7-Ubuntu-0ubuntu322.04)
+#OpenJDK 64-Bit Server VM (build 19.0.2+7-Ubuntu-0ubuntu322.04, mixed mode, sharing)
+
+# Install trimmomatic
+sudo apt update
+sudo apt install trimmomatic
+
+# Test the installation
+TrimmomaticPE
+
+# Test a sample
+TrimmomaticPE SRR2584863_1.fastq.gz SRR2584863_2.fastq.gz     SRR2584863_1_trimmed_paired.fastq.gz SRR2584863_1_trimmed_unpaired.fastq.gz     SRR2584863_2_trimmed_paired.fastq.gz SRR2584863_2_trimmed_unpaired.fastq.gz     ILLUMINACLIP:TruSeq2-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGW
+INDOW:4:15 MINLEN:36
+
+# Test in an automatic manner through a .sh file containing below:
+
+#! bin/bash
+
+# Remove the results in the data directory if needed
+## rm data/*trim*
+
+# Go to the actual project directory if needed
+
+# Make a separate directory for the trimmed pairs and orphaned results
+mkdir -p temp/trimmed
+mkdir -p temp/orphaned
+
+# Run the loop below for batch trimming
+for file in  data/*_1.fastq.gz;
+do
+    SRR=$(basename $file _1.fastq.gz)
+    echo working on $SRR
+    TrimmomaticPE data/${SRR}_1.fastq.gz data/${SRR}_2.fastq.gz \
+                  temp/trimmed/${SRR}_1.trim.fastq.gz temp/orphaned/${SRR}_1.untrim.fastq.gz \
+                  temp/trimmed/${SRR}_2.trim.fastq.gz temp/orphaned/${SRR}_2.untrim.fastq.gz \
+                  SLIDINGWINDOW:4:20 MINLEN:25 ILLUMINACLIP:NexteraPE-PE.fa:2:40:15 
+done
