@@ -3,9 +3,9 @@
 # Step 1: Create necessary directories
 mkdir -p input output human_ref
 
-# Step 2: Set a memory limit (e.g., 8GB) using ulimit
+# Step 2: Set a memory limit using ulimit if needed
 echo "Setting memory limit..."
-ulimit -v 6388608  # 8GB in KB
+ulimit -v 6388608  
 
 # Step 3: Check if the 'isoseq' conda environment exists, and create it if it doesn't
 if conda env list | grep -q "isoseq"; then
